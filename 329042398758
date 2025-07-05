@@ -163,31 +163,126 @@ end;
 
 function Library:MakeDraggable(Instance, Cutoff)
     Instance.Active = true;
+    
+    local isDragging = false
+    local dragStart, startPos
+    local lastUpdate = os.clock()
 
     Instance.InputBegan:Connect(function(Input)
         if Input.UserInputType == Enum.UserInputType.MouseButton1 then
-            local ObjPos = Vector2.new(
-                Mouse.X - Instance.AbsolutePosition.X,
-                Mouse.Y - Instance.AbsolutePosition.Y
-            );
+            -- Convert mouse position to Vector2 explicitly
+            local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+            local guiPos = Vector2.new(Instance.AbsolutePosition.X, Instance.AbsolutePosition.Y)
+            local ObjPos = mousePos - guiPos
 
             if ObjPos.Y > (Cutoff or 40) then
                 return;
             end;
 
-            while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+            isDragging = true
+            dragStart = mousePos  -- Store as Vector2
+            startPos = Instance.Position
+            
+            local connection
+            connection = RunService.RenderStepped:Connect(function()
+                if not InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+                    -- Drag ended
+                    connection:Disconnect()
+                    isDragging = false
+                    return
+                end
+                
+                -- Throttle updates to 30 FPS during drag
+                if os.clock() - lastUpdate < 0.0010 then return end
+                lastUpdate = os.clock()
+                
+                -- Get current mouse position as Vector2
+                local currentPos = Vector2.new(Mouse.X, Mouse.Y)
+                local delta = currentPos - dragStart
+                
+                -- Update position
                 Instance.Position = UDim2.new(
-                    0,
-                    Mouse.X - ObjPos.X + (Instance.Size.X.Offset * Instance.AnchorPoint.X),
-                    0,
-                    Mouse.Y - ObjPos.Y + (Instance.Size.Y.Offset * Instance.AnchorPoint.Y)
-                );
-
-                RenderStepped:Wait();
-            end;
-        end;
+                    startPos.X.Scale, startPos.X.Offset + delta.X,
+                    startPos.Y.Scale, startPos.Y.Offset + delta.Y
+                )
+            end)
+        end
     end)
-end;
+end
+
+function Library:PauseUIUpdates(Pause)
+    -- หยุดการอัปเดต UI อื่นๆ ที่ไม่จำเป็นระหว่างลาก
+    for _, element in pairs(Library.Registry) do
+        if element.Instance:IsA("Frame") or element.Instance:IsA("ScrollingFrame") then
+            element.Instance.Visible = not Pause
+        end
+    end
+    
+    -- หยุดการคำนวณใน RenderStepped อื่นๆ
+    if Pause then
+        Library.IsDragging = true
+    else
+        Library.IsDragging = false
+    end
+end
+
+function Library:UpdateColorsUsingRegistry()
+    if Library.IsDragging then return end -- ไม่อัปเดตสีระหว่างลาก
+    
+    for Idx, Object in next, Library.Registry do
+        -- ตรวจสอบว่า element อยู่ในหน้าจอหรือไม่ก่อนอัปเดต
+        if Object.Instance.AbsolutePosition.X + Object.Instance.AbsoluteSize.X > 0 and
+           Object.Instance.AbsolutePosition.Y + Object.Instance.AbsoluteSize.Y > 0 then
+           
+            for Property, ColorIdx in next, Object.Properties do
+                if type(ColorIdx) == 'string' then
+                    Object.Instance[Property] = Library[ColorIdx];
+                elseif type(ColorIdx) == 'function' then
+                    Object.Instance[Property] = ColorIdx()
+                end
+            end
+        end
+    end
+end
+
+function Library:GetTextBounds(Text, Font, Size, Resolution)
+    -- ใช้ cache เพื่อลดการคำนวณซ้ำ
+    local cacheKey = Text..tostring(Font)..tostring(Size)
+    if Library.TextBoundsCache[cacheKey] then
+        return Library.TextBoundsCache[cacheKey].X, Library.TextBoundsCache[cacheKey].Y
+    end
+    
+    local Bounds = TextService:GetTextSize(Text, Size, Font, Resolution or Vector2.new(1920, 1080))
+    Library.TextBoundsCache[cacheKey] = Bounds
+    return Bounds.X, Bounds.Y
+end
+
+-- เพิ่มที่เริ่มต้น Library
+Library.TextBoundsCache = {}
+
+function Library:OptimizeForDrag()
+    -- ลดความละเอียดของ UI ชั่วคราว
+    for _, element in pairs(Library.Registry) do
+        if element.Instance:IsA("ImageLabel") then
+            element.Instance.ImageTransparency = 0.5
+        elseif element.Instance:IsA("Frame") then
+            element.Instance.BackgroundTransparency = 0.5
+        end
+    end
+end
+
+function Library:RestoreAfterDrag()
+    -- คืนค่าความละเอียด
+    for _, element in pairs(Library.Registry) do
+        if element.Instance:IsA("ImageLabel") then
+            element.Instance.ImageTransparency = 0
+        elseif element.Instance:IsA("Frame") then
+            element.Instance.BackgroundTransparency = 0
+        end
+    end
+end
+
+
 
 function Library:AddToolTip(InfoStr, HoverInstance)
     local X, Y = Library:GetTextBounds(InfoStr, Library.Font, 14);
@@ -3613,4 +3708,3 @@ Players.PlayerRemoving:Connect(OnPlayerChange);
 
 getgenv().Library = Library
 return Library
-
